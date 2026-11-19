@@ -26,7 +26,7 @@ SaansSaaf is a mobile-first, bilingual (Hindi and English) web app. It turns a f
 
 1. **Context collection:** city, household members (children, seniors, asthma, pets), commute mode, home type and the AQI value.
 2. **AQI classification:** the AQI is mapped to Good / Moderate / Poor / Very Poor / Severe (CPCB-style bands), with a plain-language health explanation.
-3. **Personalisation:** the profile and AQI band are combined into a structured prompt for Gemini, so advice changes with who lives at home, how they travel and how bad the air is.
+3. **Personalisation:** the profile and AQI are combined into a structured prompt for Gemini, so advice changes with who lives at home, how they travel and how bad the air is.
 4. **Structured output:** the plan comes in three sections: (A) low-emission daily routine, (B) indoor air quality hacks, (C) sustainable alternatives. Every suggestion carries a short impact note.
 5. **Impact Meter:** an overall estimate of smog exposure reduction, daily emissions avoided and a family safety index.
 6. **Resilience:** if the Gemini call fails or no API key is set, a rule-based engine produces a safe plan, so the family always gets advice.
@@ -34,9 +34,9 @@ SaansSaaf is a mobile-first, bilingual (Hindi and English) web app. It turns a f
 ## ⚙️ How the Solution Works
 
 1. The user fills in the profile and AQI on the web page (Hindi or English).
-2. The browser sends the validated request to the Node.js server.
-3. The server calls the Gemini API (`gemini-3.1-flash-lite`, with an ordered list of fallback models).
-4. The response is validated and rendered as the Impact Meter plus the three plan sections.
+2. The browser sends the request to the Node.js server.
+3. The server validates the input (`validate.js`), then calls the Gemini API (`gemini-3.1-flash-lite`, with an ordered list of fallback models and retries on temporary errors).
+4. The response is rendered as the Impact Meter plus the three plan sections.
 5. If the AI call fails, the rule-based fallback plan is shown instead.
 6. The user can copy the plan or print / save it as PDF.
 
@@ -60,12 +60,24 @@ SaansSaaf is a mobile-first, bilingual (Hindi and English) web app. It turns a f
 ## 🛠️ Tech Stack and Security
 
 - **Frontend:** HTML5, responsive CSS3 (mobile-first), vanilla JavaScript (ES6+).
-- **Backend:** Node.js HTTP server.
+- **Backend:** Node.js built-in `http` module (no web framework).
 - **AI:** Google Gemini API.
 - **Security:**
-  - `GEMINI_API_KEY` is read from server-side environment variables and is never sent to the browser or committed to git (`.env` is in `.gitignore`).
-  - Input is validated on the client and the server.
+  - `GEMINI_API_KEY` is read from a server-side environment variable and is never sent to the browser or committed to git (`.env` is in `.gitignore`).
+  - Request input is validated on the server in `validate.js`: city format and length, AQI range (0 to 999), simple allowed formats for household members, commute and home type, and supported languages only.
+  - Only validated values are placed into the AI prompt, which reduces prompt-injection risk.
+  - Static file serving checks the path to block directory traversal.
   - The app keeps working through the rule-based fallback if the AI is unavailable.
+
+## 🧪 Testing
+
+Automated tests use Node's built-in test runner, so no extra packages are needed:
+
+```bash
+npm test
+```
+
+The tests in `test/validate.test.js` cover the server-side input validation: a valid request, AQI sent as a string, missing or malformed city, out-of-range or non-numeric AQI, invalid members, injection-style values, unsupported language, and default values for optional fields.
 
 ## 🚀 How to Run
 
@@ -84,10 +96,13 @@ SaansSaaf is a mobile-first, bilingual (Hindi and English) web app. It turns a f
 
 ```
 ├── .env.example          # Sample environment template
-├── .gitignore            # Ignores node_modules, .env, node.exe
+├── .gitignore
 ├── package.json
 ├── server.js             # Backend server and Gemini API proxy
+├── validate.js           # Server-side request validation
 ├── README.md
+├── test/
+│   └── validate.test.js  # Tests for request validation
 └── public/
     ├── index.html
     ├── css/style.css
