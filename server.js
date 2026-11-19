@@ -8,6 +8,7 @@
 const fs = require('fs');
 const path = require('path');
 const http = require('http');
+const { validatePlanRequest } = require('./validate');
 
 // Simple .env parser to ensure zero-dependency startup if dotenv is not yet installed
 function loadEnv() {
@@ -65,20 +66,12 @@ async function handleGeneratePlan(req, res) {
   req.on('end', async () => {
     try {
       const data = JSON.parse(bodyStr || '{}');
-      const { city, members = [], transport, homeType, aqi, language = 'hi' } = data;
-
-      // Validation
-      if (!city || typeof city !== 'string' || !city.trim()) {
+      const result = validatePlanRequest(data);
+      if (!result.ok) {
         res.writeHead(400, { 'Content-Type': 'application/json' });
-        return res.end(JSON.stringify({ error: 'City is required', message: 'Kripya shehar ka naam darj karein.' }));
+        return res.end(JSON.stringify({ error: 'Invalid input', message: result.errors[0], errors: result.errors }));
       }
-
-      const numericAqi = parseInt(aqi, 10);
-      if (isNaN(numericAqi) || numericAqi < 0) {
-        res.writeHead(400, { 'Content-Type': 'application/json' });
-        return res.end(JSON.stringify({ error: 'Invalid AQI', message: 'Sahi AQI number darj karein.' }));
-      }
-
+      const { city, members, transport, homeType, aqi: numericAqi, language } = result.value;
       // If Gemini Key is present, call Gemini API
       if (GEMINI_API_KEY && GEMINI_API_KEY.trim() !== '' && GEMINI_API_KEY !== 'your_gemini_api_key_here') {
         try {
