@@ -1,0 +1,495 @@
+<!DOCTYPE html>
+<html lang="hi">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <title>SaansSaaf - Urban Air Quality & Smog Assistant</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=Rozha+One&family=Yantramanav:wght@400;500;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+  <!-- Top Medical Disclaimer Bar -->
+  <aside class="disclaimer-bar" role="alert">
+    <div class="container disclaimer-content">
+      <span class="disclaimer-icon">⚠️</span>
+      <p id="medicalDisclaimerTop">
+        <strong>Medical Disclaimer:</strong> Ye general jaankari hai, kisi doctor ya medical professional ki salah nahi hai.
+      </p>
+    </div>
+  </aside>
+
+  <!-- Header -->
+  <header class="app-header">
+    <div class="container header-container">
+      <div class="logo-group">
+        <div class="logo-icon-wrapper">
+          <svg class="logo-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M12 3v1m0 16v1m9-9h-1M4 12H3m15.364 6.364l-.707-.707M6.343 6.343l-.707-.707m12.728 0l-.707.707M6.343 17.657l-.707.707M16 12a4 4 0 11-8 0 4 4 0 018 0z" />
+          </svg>
+        </div>
+        <div>
+          <h1 class="brand-title">Saans<span class="highlight">Saaf</span></h1>
+          <p class="brand-subtitle" id="headerSubtitle">Winter Smog & Urban Air Quality Assistant</p>
+        </div>
+      </div>
+
+      <!-- Language Selector -->
+      <div class="lang-switch-wrapper">
+        <span class="lang-label" id="langLabel">Bhasha:</span>
+        <div class="lang-toggle" role="group" aria-label="Language Selector">
+          <button type="button" class="lang-btn active" data-lang="hi" id="btnLangHi">🇮🇳 हिंदी</button>
+          <button type="button" class="lang-btn" data-lang="en" id="btnLangEn">🇬🇧 English</button>
+        </div>
+      </div>
+    </div>
+  </header>
+
+  <!-- Main Content Container -->
+  <main class="container main-content">
+    
+    <!-- Hero Introduction Card -->
+    <section class="intro-banner" id="introBanner">
+      <div class="intro-text">
+        <h2 id="introHeading">Ghar aur Parivar ko Smog se Bachayein</h2>
+        <p id="introDesc">Apne shehar ki AQI aur parivar ki zaroorato ke hisaab se payein personalized low-emission routine, indoor air hacks aur sustainable options.</p>
+      </div>
+    </section>
+
+    <!-- Main Form Grid -->
+    <form id="assistantForm" class="assistant-form" novalidate>
+      
+      <!-- Card 1: Family & Lifestyle Profile -->
+      <section class="card profile-card" aria-labelledby="profileHeading">
+        <div class="card-header">
+          <div class="card-step-badge">1</div>
+          <div>
+            <h3 id="profileHeading" class="card-title">Aapka Parivar & Lifestyle Profile</h3>
+            <p id="profileSub" class="card-subtitle">Personalized AI recommendations ke liye zaroori details</p>
+          </div>
+        </div>
+
+        <div class="form-body">
+          <!-- City Input -->
+          <div class="form-group">
+            <label for="cityInput" class="form-label" id="lblCity">
+              Shehar (City) <span class="required">*</span>
+            </label>
+            <div class="input-with-icon">
+              <span class="input-icon">📍</span>
+              <input 
+                type="text" 
+                id="cityInput" 
+                name="city" 
+                class="form-control" 
+                placeholder="Jaise: Delhi NCR, Kanpur, Patna, Mumbai..." 
+                required 
+                autocomplete="address-level2"
+              >
+            </div>
+            <!-- Quick City Chips -->
+            <div class="quick-chips" aria-label="Popular cities">
+              <span class="chips-label" id="lblQuickCities">Lokpriya:</span>
+              <button type="button" class="chip-btn" data-city="Delhi NCR">Delhi NCR</button>
+              <button type="button" class="chip-btn" data-city="Kanpur">Kanpur</button>
+              <button type="button" class="chip-btn" data-city="Patna">Patna</button>
+              <button type="button" class="chip-btn" data-city="Lucknow">Lucknow</button>
+              <button type="button" class="chip-btn" data-city="Mumbai">Mumbai</button>
+            </div>
+            <div class="field-error" id="cityError" role="alert"></div>
+          </div>
+
+          <!-- Household Members (Vulnerability) -->
+          <div class="form-group">
+            <label class="form-label" id="lblMembers">
+              Ghar mein kaun-kaun hain? (Select karein)
+            </label>
+            <div class="checkbox-grid">
+              <label class="custom-checkbox-card">
+                <input type="checkbox" name="members" value="children" id="chkChildren">
+                <div class="checkbox-content">
+                  <span class="cb-icon">👶</span>
+                  <div class="cb-text">
+                    <strong id="lblKids">Chhote Bachche</strong>
+                    <small id="subKids">&lt; 12 varsh ke</small>
+                  </div>
+                </div>
+              </label>
+
+              <label class="custom-checkbox-card">
+                <input type="checkbox" name="members" value="elderly" id="chkElderly">
+                <div class="checkbox-content">
+                  <span class="cb-icon">👵</span>
+                  <div class="cb-text">
+                    <strong id="lblElderly">Buzurg Sadasya</strong>
+                    <small id="subElderly">Senior Citizens (60+)</small>
+                  </div>
+                </div>
+              </label>
+
+              <label class="custom-checkbox-card">
+                <input type="checkbox" name="members" value="asthma" id="chkAsthma">
+                <div class="checkbox-content">
+                  <span class="cb-icon">🫁</span>
+                  <div class="cb-text">
+                    <strong id="lblAsthma">Asthma / Saans Rogi</strong>
+                    <small id="subAsthma">Respiratory Sensitivity</small>
+                  </div>
+                </div>
+              </label>
+
+              <label class="custom-checkbox-card">
+                <input type="checkbox" name="members" value="pets" id="chkPets">
+                <div class="checkbox-content">
+                  <span class="cb-icon">🐾</span>
+                  <div class="cb-text">
+                    <strong id="lblPets">Paltu Janwar (Pets)</strong>
+                    <small id="subPets">Dogs/Cats etc.</small>
+                  </div>
+                </div>
+              </label>
+            </div>
+          </div>
+
+          <!-- Transport Mode -->
+          <div class="form-grid-2">
+            <div class="form-group">
+              <label for="transportSelect" class="form-label" id="lblTransport">
+                Daily Transport ka Mukhy Tareeka <span class="required">*</span>
+              </label>
+              <div class="select-wrapper">
+                <select id="transportSelect" name="transport" class="form-control" required>
+                  <option value="" disabled selected id="optSelectTransport">Chuniye...</option>
+                  <option value="metro_bus" id="optMetro">🚇 Metro / Public Bus (Sarkari Transport)</option>
+                  <option value="two_wheeler" id="optTwoWheeler">🛵 Scooter / Motorcycle (Open air)</option>
+                  <option value="car" id="optCar">🚗 Personal Car / Taxi (AC/Closed)</option>
+                  <option value="walk_cycle" id="optWalk">🚶 Walk / Cycle (Exposed)</option>
+                  <option value="wfh" id="optWfh">💻 Work from Home (Kam travel)</option>
+                </select>
+              </div>
+            </div>
+
+            <!-- Home Type -->
+            <div class="form-group">
+              <label for="homeTypeSelect" class="form-label" id="lblHomeType">
+                Ghar ka Type <span class="required">*</span>
+              </label>
+              <div class="select-wrapper">
+                <select id="homeTypeSelect" name="homeType" class="form-control" required>
+                  <option value="" disabled selected id="optSelectHome">Chuniye...</option>
+                  <option value="highrise_apt" id="optHighrise">🏢 High-rise Apartment (Floor 5+)</option>
+                  <option value="lowrise_apt" id="optLowrise">🏬 Low-rise Apartment (Floor 1-4)</option>
+                  <option value="independent" id="optIndependent">🏡 Independent House / Ground Floor</option>
+                  <option value="congested_colony" id="optCongested">🏘️ Dense / Busy Road Colony</option>
+                </select>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- Card 2: AQI Input & Interactive Meter -->
+      <section class="card aqi-card" aria-labelledby="aqiHeading">
+        <div class="card-header">
+          <div class="card-step-badge">2</div>
+          <div>
+            <h3 id="aqiHeading" class="card-title">Air Quality Index (AQI) Input</h3>
+            <p id="aqiSub" class="card-subtitle">Number likhein ya slider se chunein</p>
+          </div>
+        </div>
+
+        <div class="form-body">
+          
+          <!-- Big AQI Display with Live Health Color -->
+          <div class="aqi-display-box" id="aqiDisplayBox">
+            <div class="aqi-main-metric">
+              <span class="aqi-num-caption" id="lblCurrentAqi">Current AQI</span>
+              <div class="aqi-big-value" id="aqiBigValue">340</div>
+              <span class="aqi-category-badge" id="aqiCategoryBadge">Severe / Gambhir</span>
+            </div>
+            
+            <div class="aqi-explanation-box">
+              <p class="aqi-desc-text" id="aqiDescText">
+                Hawa atyant hanikarak hai. Sabhi logo ko saans ki dikkat ho sakti hai. Ghar ke bahar ki activities band rakhein.
+              </p>
+              <div class="aqi-health-tag" id="aqiHealthTag">
+                ⚠️ Health Alert: Severe Risk for Children & Asthma Patients
+              </div>
+            </div>
+          </div>
+
+          <!-- Dual Inputs: Number & Slider -->
+          <div class="aqi-controls-grid">
+            <div class="form-group aqi-number-group">
+              <label for="aqiNumberInput" class="form-label" id="lblAqiNumber">
+                AQI Number Darj Karein:
+              </label>
+              <div class="input-with-action">
+                <input 
+                  type="number" 
+                  id="aqiNumberInput" 
+                  name="aqiNumber" 
+                  class="form-control aqi-num-field" 
+                  min="0" 
+                  max="999" 
+                  value="340"
+                  required
+                >
+                <span class="unit-label">PM2.5 / AQI</span>
+              </div>
+            </div>
+
+            <!-- Presets -->
+            <div class="form-group aqi-presets-group">
+              <label class="form-label" id="lblPresetAqi">Quick Select Presets:</label>
+              <div class="preset-buttons">
+                <button type="button" class="preset-btn btn-good" data-val="40">Good (40)</button>
+                <button type="button" class="preset-btn btn-mod" data-val="85">Moderate (85)</button>
+                <button type="button" class="preset-btn btn-poor" data-val="160">Poor (160)</button>
+                <button type="button" class="preset-btn btn-vpoor" data-val="260">Very Poor (260)</button>
+                <button type="button" class="preset-btn btn-severe" data-val="385">Severe (385)</button>
+              </div>
+            </div>
+          </div>
+
+          <!-- Slider with Color Scale Bar -->
+          <div class="slider-container">
+            <div class="range-labels">
+              <span>0 (Good)</span>
+              <span>100</span>
+              <span>200</span>
+              <span>300</span>
+              <span>500+ (Severe)</span>
+            </div>
+            <input 
+              type="range" 
+              id="aqiSlider" 
+              class="aqi-slider" 
+              min="0" 
+              max="500" 
+              value="340" 
+              step="5"
+              aria-label="AQI slider"
+            >
+            <div class="color-scale-bar" aria-hidden="true">
+              <span class="scale-segment scale-good" title="0-50 Good"></span>
+              <span class="scale-segment scale-moderate" title="51-100 Moderate"></span>
+              <span class="scale-segment scale-poor" title="101-200 Poor"></span>
+              <span class="scale-segment scale-verypoor" title="201-300 Very Poor"></span>
+              <span class="scale-segment scale-severe" title="301-500 Severe"></span>
+            </div>
+          </div>
+
+          <div class="field-error" id="aqiError" role="alert"></div>
+        </div>
+      </section>
+
+      <!-- Submit Action -->
+      <div class="submit-section">
+        <button type="submit" id="btnGenerate" class="btn-primary-action">
+          <span class="btn-icon">✨</span>
+          <span class="btn-text" id="btnSubmitText">AI Daily Plan & Impact Dekhein</span>
+        </button>
+      </div>
+    </form>
+
+    <!-- Loading State View -->
+    <section id="loadingState" class="state-card loading-state" style="display: none;" aria-live="polite">
+      <div class="breathing-circle-pulse">
+        <div class="circle-inner">🫁</div>
+      </div>
+      <h3 id="loadingTitle">Gemini AI Plan Taiyar Kar Raha Hai...</h3>
+      <p id="loadingMsg">Aapke shehar ki hawa aur parivar ke sadasyo ke hisaab se sabse safe routine banayi ja rahi hai.</p>
+      <div class="loading-progress-bar">
+        <div class="progress-fill"></div>
+      </div>
+    </section>
+
+    <!-- Error State View -->
+    <section id="errorState" class="state-card error-state" style="display: none;" role="alert">
+      <div class="error-icon-box">⚠️</div>
+      <h3 id="errorTitle">Kuch Gadbad Huyi!</h3>
+      <p id="errorMessage">Plan generate nahi ho saka. Kripya apna internet connection ya input check karein.</p>
+      <button type="button" id="btnRetry" class="btn-secondary-action">
+        🔄 <span id="btnRetryText">Dobara Koshish Karein</span>
+      </button>
+    </section>
+
+    <!-- Results Section (AI Daily Plan & Impact Meter) -->
+    <section id="resultsSection" class="results-section" style="display: none;" aria-live="polite">
+      
+      <!-- Top Overview & Impact Meter -->
+      <div class="card impact-meter-card">
+        <div class="impact-header">
+          <div class="impact-title-group">
+            <div class="impact-badges-row">
+              <span class="impact-badge-tag">📊 Impact Meter</span>
+              <span id="planSourceBadge" class="source-badge"></span>
+            </div>
+            <h2 id="impactHeaderTitle">Aapke Daily Plan Ka Projected Asar</h2>
+            <p id="impactHeaderSub">SaansSaaf recommendations apnane se aapka aur paryavaran ka fayda</p>
+          </div>
+          <button type="button" class="btn-reset" id="btnNewPlan">
+            ✏️ <span id="btnNewPlanText">Profile Badlein</span>
+          </button>
+        </div>
+
+        <!-- Impact Badges & Metrics Grid -->
+        <div class="impact-metrics-grid">
+          
+          <div class="metric-box exposure-box">
+            <div class="metric-top">
+              <span class="metric-icon">🛡️</span>
+              <span class="metric-label" id="lblExpReduction">Smog Exposure Kam</span>
+            </div>
+            <div class="metric-value" id="valExposure">-45% se -65%</div>
+            <div class="metric-bar-wrap">
+              <div class="metric-bar-fill exposure-fill" id="barExposure" style="width: 60%;"></div>
+            </div>
+            <span class="metric-subtext" id="subExposure">Ghar ke andar aur transit mein PM2.5 se bachaav</span>
+          </div>
+
+          <div class="metric-box emissions-box">
+            <div class="metric-top">
+              <span class="metric-icon">🌱</span>
+              <span class="metric-label" id="lblEmissionSaved">Daily Emissions Bachengi</span>
+            </div>
+            <div class="metric-value" id="valEmissions">~2.8 kg CO₂e</div>
+            <div class="metric-bar-wrap">
+              <div class="metric-bar-fill emissions-fill" id="barEmissions" style="width: 75%;"></div>
+            </div>
+            <span class="metric-subtext" id="subEmissions">Eco-friendly transit aur energy choices se</span>
+          </div>
+
+          <div class="metric-box health-box">
+            <div class="metric-top">
+              <span class="metric-icon">❤️</span>
+              <span class="metric-label" id="lblHealthSafety">Family Safety Index</span>
+            </div>
+            <div class="metric-value" id="valHealthSafety">High Protection</div>
+            <div class="metric-badge-pill" id="badgeVulnerableGroup">
+              Bachche aur Asthma Sadasya Protected
+            </div>
+            <span class="metric-subtext" id="subHealthSafety">Peak smog timing mein bahar nikalna zero</span>
+          </div>
+
+        </div>
+
+        <!-- Note about rough estimates -->
+        <div class="estimate-disclaimer">
+          <span class="info-icon">ℹ️</span>
+          <p id="lblRoughEstimate">
+            <strong>Dhyan dein:</strong> Yeh numbers standard environmental health research ke aadharit <em>rough estimates (anumaanit aakde)</em> hain, exact lab readings nahi.
+          </p>
+        </div>
+      </div>
+
+      <!-- Section (a): Low-Emission Daily Routine -->
+      <div class="card plan-card routine-card">
+        <div class="plan-card-header">
+          <div class="plan-icon-tag bg-blue">🏃</div>
+          <div>
+            <span class="plan-section-badge" id="badgeSecA">Section A</span>
+            <h3 class="plan-title" id="titleSecA">Low-Emission Daily Routine (Surakshit Dainik Schedule)</h3>
+            <p class="plan-desc" id="descSecA">Bahar nikalne ke safe ghante aur commute ko optimize karne ke tareeke</p>
+          </div>
+        </div>
+
+        <div class="plan-card-body" id="contentSecA">
+          <!-- Dynamic AI Output will render here -->
+        </div>
+
+        <div class="card-impact-footer" id="impactFooterA">
+          <span class="impact-chip">📉 Exposure Impact: <strong id="chipExpA">-50% Peak Inhalation</strong></span>
+          <span class="impact-chip">🚗 Emissions: <strong id="chipEmiA">Carpool / Transit savings</strong></span>
+        </div>
+      </div>
+
+      <!-- Section (b): Indoor Air Quality Hacks -->
+      <div class="card plan-card indoor-card">
+        <div class="plan-card-header">
+          <div class="plan-icon-tag bg-green">🏠</div>
+          <div>
+            <span class="plan-section-badge" id="badgeSecB">Section B</span>
+            <h3 class="plan-title" id="titleSecB">Indoor Air Quality Hacks (Ghar Ki Hawa Saaf Rakhne Ke Upay)</h3>
+            <p class="plan-desc" id="descSecB">Bina mehenge purifier ke ghar ke andar particulate pollution kam karein</p>
+          </div>
+        </div>
+
+        <div class="plan-card-body" id="contentSecB">
+          <!-- Dynamic AI Output will render here -->
+        </div>
+
+        <div class="card-impact-footer" id="impactFooterB">
+          <span class="impact-chip">🏠 Indoor Impact: <strong id="chipExpB">-40% Indoor PM2.5</strong></span>
+          <span class="impact-chip">💡 Energy: <strong id="chipEmiB">Zero Electricity Hacks</strong></span>
+        </div>
+      </div>
+
+      <!-- Section (c): Sustainable Alternatives -->
+      <div class="card plan-card sustainable-card">
+        <div class="plan-card-header">
+          <div class="plan-icon-tag bg-amber">🌱</div>
+          <div>
+            <span class="plan-section-badge" id="badgeSecC">Section C</span>
+            <h3 class="plan-title" id="titleSecC">Sustainable Alternatives (Paryavaran-Anukool Vikalp)</h3>
+            <p class="plan-desc" id="descSecC">Aisi aadat jo aapko bhi bachaye aur shehar ki hawa ko aur kharab hone se roke</p>
+          </div>
+        </div>
+
+        <div class="plan-card-body" id="contentSecC">
+          <!-- Dynamic AI Output will render here -->
+        </div>
+
+        <div class="card-impact-footer" id="impactFooterC">
+          <span class="impact-chip">🍃 Community Impact: <strong id="chipExpC">Cleaner Local Air</strong></span>
+          <span class="impact-chip">⚡ Footprint: <strong id="chipEmiC">Reduced Household Carbon</strong></span>
+        </div>
+      </div>
+
+      <!-- Action Row: Copy, Share, Print -->
+      <div class="results-actions">
+        <button type="button" class="btn-action-outline" id="btnCopyPlan">
+          📋 <span id="btnCopyText">Plan Copy Karein</span>
+        </button>
+        <button type="button" class="btn-action-outline" id="btnPrintPlan">
+          🖨️ <span id="btnPrintText">Save / Print Plan</span>
+        </button>
+      </div>
+
+      <!-- Bottom Medical Alert Box -->
+      <div class="medical-alert-card">
+        <div class="med-alert-icon">⚕️</div>
+        <div>
+          <h4 id="medAlertTitle">Swasthya Salah (Medical Notice)</h4>
+          <p id="medAlertBody">
+            Yeh sujhaav samanya saavdhani aur awareness ke liye hain, kisi certified medical doctor ki prescription ya salah ka vikalp nahi hain. Yadi parivar mein kisi ko saans lene mein kathinai, seene mein jakdan ya khansi ho, toh kripya turant nazdeeki doctor ya hospital se sampark karein.
+          </p>
+        </div>
+      </div>
+
+    </section>
+
+  </main>
+
+  <!-- Footer -->
+  <footer class="app-footer">
+    <div class="container footer-container">
+      <p class="footer-copy">
+        <strong>SaansSaaf</strong> &copy; 2026 &bull; PromptWars Challenge 6: Urban Air Quality Assistant
+      </p>
+      <p class="footer-disclaimer-note" id="footerNote">
+        "Saaf Hawa, Surakshit Parivar" &bull; Powered by Google Gemini API &bull; Har kadam saaf kal ke liye.
+      </p>
+    </div>
+  </footer>
+
+  <!-- Notification Toast -->
+  <div id="toastNotification" class="toast" role="status" aria-live="polite"></div>
+
+  <!-- JavaScript Modules -->
+  <script src="js/aqi-data.js"></script>
+  <script src="js/app.js"></script>
+</body>
+</html>
