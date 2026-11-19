@@ -1,7 +1,7 @@
 /**
  * server.js
  * Backend server for SaansSaaf - Urban Air Quality Assistant
- * Supports both Express (if installed) and Native Node.js HTTP server.
+  * Uses Node's built-in http module (no web framework).
  * Communicates securely with Google Gemini API without exposing the key.
  */
 
