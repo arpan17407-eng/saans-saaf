@@ -202,10 +202,19 @@ const elements = {
   chipEmiC: document.getElementById('chipEmiC')
 };
 
+// Cached DOM references for i18n keys (populated once on DOMContentLoaded)
+const i18nElements = new Map();
+let aqiRafId = null;
+
 /**
  * Initialize application listeners and defaults
  */
 document.addEventListener('DOMContentLoaded', () => {
+  for (const key of Object.keys(I18N.hi)) {
+    const el = document.getElementById(key);
+    if (el) i18nElements.set(key, el);
+  }
+
   setupLanguageSwitching();
   setupAqiSync();
   setupQuickChips();
@@ -222,18 +231,21 @@ document.addEventListener('DOMContentLoaded', () => {
  */
 function setLanguage(lang) {
   state.language = lang;
+  document.documentElement.lang = lang;
   document.body.className = `lang-${lang}`;
 
   // Update button active states
   document.querySelectorAll('.lang-btn').forEach(btn => {
-    btn.classList.toggle('active', btn.dataset.lang === lang);
+    const isActive = btn.dataset.lang === lang;
+    btn.classList.toggle('active', isActive);
+    btn.setAttribute('aria-pressed', String(isActive));
   });
 
-  // Apply translations for static DOM IDs
+  // Apply translations using cached DOM references
   const dict = I18N[lang];
-  for (const [key, text] of Object.entries(dict)) {
-    const el = document.getElementById(key);
-    if (el) {
+  for (const [key, el] of i18nElements.entries()) {
+    const text = dict[key];
+    if (text !== undefined) {
       if (text.includes('<') && text.includes('>')) {
         el.innerHTML = text;
       } else {
@@ -259,7 +271,7 @@ function setLanguage(lang) {
 function setupLanguageSwitching() {
   document.querySelectorAll('.lang-btn').forEach(btn => {
     btn.addEventListener('click', (e) => {
-      const selected = e.target.dataset.lang;
+      const selected = e.currentTarget.dataset.lang;
       if (selected && selected !== state.language) {
         setLanguage(selected);
       }
@@ -268,27 +280,35 @@ function setupLanguageSwitching() {
 }
 
 /**
+ * Schedule AQI UI update on the next animation frame to avoid layout thrashing during slider drag.
+ */
+function scheduleAqiUIUpdate(aqi) {
+  if (aqiRafId !== null) cancelAnimationFrame(aqiRafId);
+  aqiRafId = requestAnimationFrame(() => {
+    aqiRafId = null;
+    updateAqiUI(aqi);
+  });
+}
+
+/**
  * Sync Range Slider & Number Input with live color changes
  */
 function setupAqiSync() {
-  // Slider input
   elements.aqiSlider.addEventListener('input', (e) => {
     const val = parseInt(e.target.value, 10) || 0;
     elements.aqiNumberInput.value = val;
     state.aqi = val;
-    updateAqiUI(val);
+    scheduleAqiUIUpdate(val);
   });
 
-  // Number input
   elements.aqiNumberInput.addEventListener('input', (e) => {
     let val = parseInt(e.target.value, 10);
     if (isNaN(val) || val < 0) val = 0;
     if (val > 999) val = 999;
-    
-    // Slider caps at 500
+
     elements.aqiSlider.value = Math.min(val, 500);
     state.aqi = val;
-    updateAqiUI(val);
+    scheduleAqiUIUpdate(val);
   });
 }
 
@@ -421,14 +441,20 @@ function validateForm() {
 
 function showError(inputEl, errorEl, msg) {
   inputEl.classList.add('is-invalid');
-  errorEl.textContent = msg;
-  errorEl.classList.add('active');
+  inputEl.setAttribute('aria-invalid', 'true');
+  if (errorEl) {
+    errorEl.textContent = msg;
+    errorEl.classList.add('active');
+  }
 }
 
 function clearError(inputEl, errorEl) {
   inputEl.classList.remove('is-invalid');
-  errorEl.textContent = '';
-  errorEl.classList.remove('active');
+  inputEl.removeAttribute('aria-invalid');
+  if (errorEl) {
+    errorEl.textContent = '';
+    errorEl.classList.remove('active');
+  }
 }
 
 /**
@@ -515,25 +541,17 @@ function renderPlan(planData) {
       (lang === 'hi' ? 'Bachche aur Asthma Sadasya Surakshit' : 'Vulnerable Members Shielded');
   }
 
-  // 2. Section A: Low-emission daily routine
-  if (planData.sectionA) {
-    renderSectionItems(elements.contentSecA, planData.sectionA.items || []);
-    if (planData.sectionA.impactChipExp) elements.chipExpA.textContent = planData.sectionA.impactChipExp;
-    if (planData.sectionA.impactChipEmi) elements.chipEmiA.textContent = planData.sectionA.impactChipEmi;
-  }
+  const sections = [
+    { data: planData.sectionA, content: elements.contentSecA, chipExp: elements.chipExpA, chipEmi: elements.chipEmiA },
+    { data: planData.sectionB, content: elements.contentSecB, chipExp: elements.chipExpB, chipEmi: elements.chipEmiB },
+    { data: planData.sectionC, content: elements.contentSecC, chipExp: elements.chipExpC, chipEmi: elements.chipEmiC }
+  ];
 
-  // 3. Section B: Indoor air quality hacks
-  if (planData.sectionB) {
-    renderSectionItems(elements.contentSecB, planData.sectionB.items || []);
-    if (planData.sectionB.impactChipExp) elements.chipExpB.textContent = planData.sectionB.impactChipExp;
-    if (planData.sectionB.impactChipEmi) elements.chipEmiB.textContent = planData.sectionB.impactChipEmi;
-  }
-
-  // 4. Section C: Sustainable alternatives
-  if (planData.sectionC) {
-    renderSectionItems(elements.contentSecC, planData.sectionC.items || []);
-    if (planData.sectionC.impactChipExp) elements.chipExpC.textContent = planData.sectionC.impactChipExp;
-    if (planData.sectionC.impactChipEmi) elements.chipEmiC.textContent = planData.sectionC.impactChipEmi;
+  for (const sec of sections) {
+    if (!sec.data) continue;
+    renderSectionItems(sec.content, sec.data.items || []);
+    if (sec.data.impactChipExp) sec.chipExp.textContent = sec.data.impactChipExp;
+    if (sec.data.impactChipEmi) sec.chipEmi.textContent = sec.data.impactChipEmi;
   }
 }
 
@@ -577,23 +595,18 @@ function setupActionButtons() {
     let textToCopy = `*SaansSaaf Daily Plan - ${state.city} (AQI: ${state.aqi})*\n\n`;
     textToCopy += `📊 *Estimated Impact:* Exposure Reduction: ${elements.valExposure.textContent} | Emissions Saved: ${elements.valEmissions.textContent}\n\n`;
     
-    // Section A
-    textToCopy += `🏃 *Section A: Low-Emission Daily Routine*\n`;
-    (state.currentPlanData.sectionA?.items || []).forEach(it => {
-      textToCopy += `• ${it.title}: ${it.description} (Impact: ${it.impact || 'N/A'})\n`;
-    });
+    const sectionsToCopy = [
+      { label: '🏃 *Section A: Low-Emission Daily Routine*', items: state.currentPlanData.sectionA?.items },
+      { label: '\n🏠 *Section B: Indoor Air Quality Hacks*', items: state.currentPlanData.sectionB?.items },
+      { label: '\n🌱 *Section C: Sustainable Alternatives*', items: state.currentPlanData.sectionC?.items }
+    ];
 
-    // Section B
-    textToCopy += `\n🏠 *Section B: Indoor Air Quality Hacks*\n`;
-    (state.currentPlanData.sectionB?.items || []).forEach(it => {
-      textToCopy += `• ${it.title}: ${it.description} (Impact: ${it.impact || 'N/A'})\n`;
-    });
-
-    // Section C
-    textToCopy += `\n🌱 *Section C: Sustainable Alternatives*\n`;
-    (state.currentPlanData.sectionC?.items || []).forEach(it => {
-      textToCopy += `• ${it.title}: ${it.description} (Impact: ${it.impact || 'N/A'})\n`;
-    });
+    for (const sec of sectionsToCopy) {
+      textToCopy += `${sec.label}\n`;
+      for (const it of (sec.items || [])) {
+        textToCopy += `• ${it.title}: ${it.description} (Impact: ${it.impact || 'N/A'})\n`;
+      }
+    }
 
     textToCopy += `\n⚠️ Medical Disclaimer: General jaankari hai, doctor ki salah nahi hai.\n(Generated via SaansSaaf Assistant)`;
 

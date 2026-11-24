@@ -1,36 +1,38 @@
 /**
  * server.js
- * Backend server for SaansSaaf - Urban Air Quality Assistant
-  * Uses Node's built-in http module (no web framework).
- * Communicates securely with Google Gemini API without exposing the key.
+ * Backend server for SaansSaaf - Urban Air Quality Assistant.
+ * Uses native Node.js HTTP with gzip compression, in-memory TTL response caching,
+ * security headers, and secure server-side Google Gemini API integration.
  */
 
 const fs = require('fs');
 const path = require('path');
 const http = require('http');
-const { validatePlanRequest } = require('./validate');
+const zlib = require('zlib');
 
-// Simple .env parser to ensure zero-dependency startup if dotenv is not yet installed
+/**
+ * Load environment variables from .env without external dependencies.
+ */
 function loadEnv() {
   const envPath = path.join(__dirname, '.env');
-  if (fs.existsSync(envPath)) {
-    const content = fs.readFileSync(envPath, 'utf8');
-    content.split(/\r?\n/).forEach(line => {
-      const trimmed = line.trim();
-      if (trimmed && !trimmed.startsWith('#')) {
-        const eqIdx = trimmed.indexOf('=');
-        if (eqIdx !== -1) {
-          const key = trimmed.substring(0, eqIdx).trim();
-          let val = trimmed.substring(eqIdx + 1).trim();
-          if ((val.startsWith('"') && val.endsWith('"')) || (val.startsWith("'") && val.endsWith("'"))) {
-            val = val.slice(1, -1);
-          }
-          if (!process.env[key]) {
-            process.env[key] = val;
-          }
-        }
-      }
-    });
+  if (!fs.existsSync(envPath)) return;
+
+  const content = fs.readFileSync(envPath, 'utf8');
+  for (const line of content.split(/\r?\n/)) {
+    const trimmed = line.trim();
+    if (!trimmed || trimmed.startsWith('#')) continue;
+
+    const eqIdx = trimmed.indexOf('=');
+    if (eqIdx === -1) continue;
+
+    const key = trimmed.substring(0, eqIdx).trim();
+    let val = trimmed.substring(eqIdx + 1).trim();
+    if ((val.startsWith('"') && val.endsWith('"')) || (val.startsWith("'") && val.endsWith("'"))) {
+      val = val.slice(1, -1);
+    }
+    if (!process.env[key]) {
+      process.env[key] = val;
+    }
   }
 }
 
@@ -38,8 +40,11 @@ loadEnv();
 
 const PORT = parseInt(process.env.PORT, 10) || 3000;
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY || '';
+const PUBLIC_DIR = path.join(__dirname, 'public');
+const MAX_BODY_BYTES = 64 * 1024; // 64 KB limit for JSON plan requests
+const CACHE_TTL_MS = 15 * 60 * 1000; // 15 minutes
+const CACHE_MAX_ENTRIES = 100;
 
-// MIME Types for static files
 const MIME_TYPES = {
   '.html': 'text/html; charset=UTF-8',
   '.css': 'text/css; charset=UTF-8',
@@ -51,90 +56,211 @@ const MIME_TYPES = {
   '.ico': 'image/x-icon'
 };
 
+const COMPRESSIBLE_EXTS = new Set(['.html', '.css', '.js', '.json', '.svg']);
+
 /**
- * Handle API POST request for Plan Generation
+ * Bounded in-memory TTL cache for generated plans to reduce latency and API quota usage.
  */
-async function handleGeneratePlan(req, res) {
-  let bodyStr = '';
-  req.on('data', chunk => {
-    bodyStr += chunk;
-    if (bodyStr.length > 1e6) { // 1MB limit
-      req.destroy();
+class PlanCache {
+  constructor(maxEntries = CACHE_MAX_ENTRIES, ttlMs = CACHE_TTL_MS) {
+    this.maxEntries = maxEntries;
+    this.ttlMs = ttlMs;
+    this.store = new Map();
+  }
+
+  buildKey({ city, members, transport, homeType, aqi, language }) {
+    const normalizedMembers = [...members].sort().join(',');
+    const aqiBucket = Math.floor(aqi / 25) * 25;
+    return `${city.toLowerCase()}|${normalizedMembers}|${transport}|${homeType}|${aqiBucket}|${language}`;
+  }
+
+  get(key) {
+    const entry = this.store.get(key);
+    if (!entry) return null;
+    if (Date.now() > entry.expiresAt) {
+      this.store.delete(key);
+      return null;
     }
+    // Refresh LRU order
+    this.store.delete(key);
+    this.store.set(key, entry);
+    return entry.value;
+  }
+
+  set(key, value) {
+    if (this.store.size >= this.maxEntries) {
+      const oldestKey = this.store.keys().next().value;
+      this.store.delete(oldestKey);
+    }
+    this.store.set(key, {
+      value,
+      expiresAt: Date.now() + this.ttlMs
+    });
+  }
+
+  clear() {
+    this.store.clear();
+  }
+}
+
+const planCache = new PlanCache();
+
+/**
+ * Send a JSON response with consistent headers.
+ */
+function sendJson(res, statusCode, payload, extraHeaders = {}) {
+  const body = JSON.stringify(payload);
+  res.writeHead(statusCode, {
+    'Content-Type': 'application/json; charset=UTF-8',
+    ...extraHeaders
   });
+  res.end(body);
+}
 
-  req.on('end', async () => {
-    try {
-      const data = JSON.parse(bodyStr || '{}');
-      const result = validatePlanRequest(data);
-      if (!result.ok) {
-        res.writeHead(400, { 'Content-Type': 'application/json' });
-        return res.end(JSON.stringify({ error: 'Invalid input', message: result.errors[0], errors: result.errors }));
+/**
+ * Read and parse a JSON request body with strict byte-size enforcement.
+ */
+function readJsonBody(req, maxBytes = MAX_BODY_BYTES) {
+  return new Promise((resolve, reject) => {
+    const chunks = [];
+    let totalBytes = 0;
+
+    req.on('data', chunk => {
+      totalBytes += chunk.length;
+      if (totalBytes > maxBytes) {
+        const err = new Error('Payload Too Large');
+        err.statusCode = 413;
+        req.destroy();
+        reject(err);
+        return;
       }
-      const { city, members, transport, homeType, aqi: numericAqi, language } = result.value;
-      // If Gemini Key is present, call Gemini API
-      if (GEMINI_API_KEY && GEMINI_API_KEY.trim() !== '' && GEMINI_API_KEY !== 'your_gemini_api_key_here') {
-        try {
-          const { plan: aiPlan, model: successfulModel } = await callGeminiAPI({ city, members, transport, homeType, aqi: numericAqi, language });
-          aiPlan.source = `gemini (${successfulModel})`;
-          aiPlan.model = successfulModel;
-          console.log(`\n🎉 Plan successfully generated via Gemini API [Model: ${successfulModel}]!`);
-          res.writeHead(200, { 'Content-Type': 'application/json' });
-          return res.end(JSON.stringify(aiPlan));
-        } catch (apiErr) {
-          console.error('\n======================================================');
-          console.error('❌ ALL GEMINI CANDIDATE MODELS FAILED - FULL ERROR:');
-          console.error(apiErr);
-          if (apiErr.stack) {
-            console.error('Stack Trace:', apiErr.stack);
-          }
-          if (apiErr.responseBody) {
-            console.error('API Response Body:', apiErr.responseBody);
-          }
-          console.error('======================================================\n');
-        }
-      } else {
-        console.info('ℹ️ Note: GEMINI_API_KEY not configured in .env. Using built-in SaansSaaf expert engine for response.');
+      chunks.push(chunk);
+    });
+
+    req.on('end', () => {
+      try {
+        const raw = Buffer.concat(chunks).toString('utf8');
+        resolve(raw ? JSON.parse(raw) : {});
+      } catch {
+        const err = new Error('Invalid JSON payload');
+        err.statusCode = 400;
+        reject(err);
       }
+    });
 
-      // Fallback Expert Rule-Based Plan (Only when all models fail or key is not provided)
-      console.log('🛡️ Activating expert rule-based fallback plan...');
-      const fallbackPlan = generateExpertFallbackPlan({ city, members, transport, homeType, aqi: numericAqi, language });
-      fallbackPlan.source = 'fallback';
-      fallbackPlan.model = 'rule-based engine';
-      res.writeHead(200, { 'Content-Type': 'application/json' });
-      res.end(JSON.stringify(fallbackPlan));
-
-    } catch (err) {
-      console.error('Request error:', err);
-      res.writeHead(500, { 'Content-Type': 'application/json' });
-      res.end(JSON.stringify({ error: 'Internal Server Error', message: err.message }));
-    }
+    req.on('error', reject);
   });
 }
 
 /**
- * Call Google Gemini API
+ * Validate and sanitize incoming plan request parameters.
  */
-async function callGeminiAPI({ city, members, transport, homeType, aqi, language }) {
+function sanitizePlanRequest(data) {
+  if (!data || typeof data !== 'object' || Array.isArray(data)) {
+    return { error: 'Invalid request body', message: 'Sahi request data bhejein.' };
+  }
 
-  const candidateModels = [
-    'gemini-3.1-flash-lite',
-    'gemini-3.5-flash-lite',
-    'gemini-3.8-flash',
-    'gemini-3.6-flash'
-  ];
-  let lastError = null;
+  const city = typeof data.city === 'string' ? data.city.trim().slice(0, 80) : '';
+  if (!city) {
+    return { error: 'City is required', message: 'Kripya shehar ka naam darj karein.' };
+  }
 
-  for (const modelName of candidateModels) {
-    console.log(`\n🔄 Attempting Gemini API with model: ${modelName}...`);
-    const url = `https://generativelanguage.googleapis.com/v1beta/models/${modelName}:generateContent?key=${encodeURIComponent(GEMINI_API_KEY)}`;
+  const numericAqi = Number(data.aqi);
+  if (!Number.isFinite(numericAqi) || numericAqi < 0 || numericAqi > 999) {
+    return { error: 'Invalid AQI', message: 'Sahi AQI number darj karein (0-999).' };
+  }
 
-    const langPrompt = language === 'hi'
-      ? 'The response MUST be written in conversational, easy-to-understand Hindi (Devanagari script with common Indian terms).'
-      : 'The response MUST be written in clear, concise English.';
+  const allowedMembers = new Set(['children', 'elderly', 'asthma', 'pets']);
+  const members = Array.isArray(data.members)
+    ? data.members.filter(m => typeof m === 'string' && allowedMembers.has(m))
+    : [];
 
-    const prompt = `
+  const transport = typeof data.transport === 'string' ? data.transport.trim().slice(0, 40) : 'public_transit';
+  const homeType = typeof data.homeType === 'string' ? data.homeType.trim().slice(0, 40) : 'lowrise_apt';
+  const language = data.language === 'en' ? 'en' : 'hi';
+
+  return {
+    value: {
+      city,
+      members,
+      transport,
+      homeType,
+      aqi: Math.round(numericAqi),
+      language
+    }
+  };
+}
+
+function hasActiveGeminiKey() {
+  if (process.env.NODE_ENV === 'test') return false;
+  return Boolean(GEMINI_API_KEY && GEMINI_API_KEY.trim() !== '' && GEMINI_API_KEY !== 'your_gemini_api_key_here');
+}
+
+function sleep(ms) {
+  return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+/**
+ * Handle API POST request for Plan Generation.
+ */
+async function handleGeneratePlan(req, res) {
+  try {
+    const rawBody = await readJsonBody(req);
+    const sanitized = sanitizePlanRequest(rawBody);
+
+    if (sanitized.error) {
+      return sendJson(res, 400, { error: sanitized.error, message: sanitized.message });
+    }
+
+    const params = sanitized.value;
+    const cacheKey = planCache.buildKey(params);
+    const cached = planCache.get(cacheKey);
+    if (cached) {
+      return sendJson(res, 200, cached, { 'X-Cache': 'HIT' });
+    }
+
+    if (hasActiveGeminiKey()) {
+      try {
+        const { plan: aiPlan, model: successfulModel } = await callGeminiAPI(params);
+        aiPlan.source = `gemini (${successfulModel})`;
+        aiPlan.model = successfulModel;
+        planCache.set(cacheKey, aiPlan);
+        console.log(`\n🎉 Plan successfully generated via Gemini API [Model: ${successfulModel}]!`);
+        return sendJson(res, 200, aiPlan, { 'X-Cache': 'MISS' });
+      } catch (apiErr) {
+        console.error('\n======================================================');
+        console.error('❌ ALL GEMINI CANDIDATE MODELS FAILED - FULL ERROR:');
+        console.error(apiErr);
+        if (apiErr.stack) console.error('Stack Trace:', apiErr.stack);
+        if (apiErr.responseBody) console.error('API Response Body:', apiErr.responseBody);
+        console.error('======================================================\n');
+      }
+    } else {
+      console.info('ℹ️ Note: GEMINI_API_KEY not configured in .env. Using built-in SaansSaaf expert engine.');
+    }
+
+    console.log('🛡️ Activating expert rule-based fallback plan...');
+    const fallbackPlan = generateExpertFallbackPlan(params);
+    fallbackPlan.source = 'fallback';
+    fallbackPlan.model = 'rule-based engine';
+    planCache.set(cacheKey, fallbackPlan);
+    return sendJson(res, 200, fallbackPlan, { 'X-Cache': 'MISS' });
+  } catch (err) {
+    const status = err.statusCode || 500;
+    if (status >= 500) console.error('Request error:', err);
+    return sendJson(res, status, { error: err.message || 'Internal Server Error', message: err.message });
+  }
+}
+
+/**
+ * Build the structured Gemini prompt for a family's AQI profile.
+ */
+function buildGeminiPrompt({ city, members, transport, homeType, aqi, language }) {
+  const langPrompt = language === 'hi'
+    ? 'The response MUST be written in conversational, easy-to-understand Hindi (Devanagari script with common Indian terms).'
+    : 'The response MUST be written in clear, concise English.';
+
+  return `
 You are the AI engine for "SaansSaaf", an Urban Air Quality & Winter Smog Assistant for families in smog-hit Indian cities.
 
 USER CONTEXT:
@@ -147,19 +273,14 @@ USER CONTEXT:
 
 TASK:
 Generate a personalized, medically-safe daily action plan tailored to this family's specific commute, home layout, and vulnerable family members (especially children, seniors, or asthma sufferers).
-You MUST divide your response into three specific core sections:
+Divide your response into three core sections:
 (a) Low-emission daily routine: Safe outdoor time windows, commute shift advice, morning smog avoidance.
 (b) Indoor air quality hacks: Actionable particulate reduction without needing expensive purifiers (e.g. damp mopping, sealing windows during smog peak, exhaust usage, DIY filters).
 (c) Sustainable alternatives: Long-term and daily choices that cut household emissions and local pollution.
-
-You MUST also provide an Impact Meter with rough scientific estimates for:
-- Exposure reduction percentage (e.g., "-45% to -65%")
-- Daily emissions avoided (e.g., "~2.5 kg CO2e")
-- Family safety summary
-- Mention clearly that these numbers are rough estimates.
+Also provide an Impact Meter with rough scientific estimates (exposure reduction %, daily emissions avoided, family safety summary).
 
 OUTPUT FORMAT:
-Respond with ONLY valid JSON adhering strictly to this JSON schema without any markdown wrapping or backticks:
+Respond with ONLY valid JSON matching this schema without markdown backticks:
 {
   "impact": {
     "exposureReduction": "-45% se -65%",
@@ -173,85 +294,56 @@ Respond with ONLY valid JSON adhering strictly to this JSON schema without any m
     "title": "Low-Emission Daily Routine",
     "impactChipExp": "-55% Peak Commute Inhalation",
     "impactChipEmi": "Carpool & Transit Footprint Savings",
-    "items": [
-      {
-        "icon": "⏰",
-        "title": "Morning Routine Adjustment",
-        "description": "Avoid morning walks before 9:00 AM when thermal inversion traps smog at ground level.",
-        "impact": "Drops toxic PM2.5 inhalation by ~60%"
-      },
-      {
-        "icon": "🚇",
-        "title": "Commute Optimization",
-        "description": "Shift to non-peak hours or closed public transport; wear well-fitted N95.",
-        "impact": "Saves ~1.8 kg personal vehicle emissions"
-      }
-    ]
+    "items": [{ "icon": "⏰", "title": "...", "description": "...", "impact": "..." }]
   },
   "sectionB": {
     "title": "Indoor Air Quality Hacks",
     "impactChipExp": "-40% Indoor PM2.5 Infiltration",
     "impactChipEmi": "Zero-Electricity Natural Hacks",
-    "items": [
-      {
-        "icon": "🧹",
-        "title": "Damp Mopping (Geela Poncha)",
-        "description": "Use wet mopping twice daily instead of dry sweeping which resuspends dust.",
-        "impact": "Reduces indoor resuspended dust by ~35%"
-      },
-      {
-        "icon": "🪟",
-        "title": "Airtight Window Sealing",
-        "description": "Seal window cracks using cloth strips during late evening and early morning smog peaks.",
-        "impact": "Keeps indoor AQI 30-50 points lower than outside"
-      }
-    ]
+    "items": [{ "icon": "🧹", "title": "...", "description": "...", "impact": "..." }]
   },
   "sectionC": {
     "title": "Sustainable Alternatives",
     "impactChipExp": "Cleaner Neighborhood Air",
     "impactChipEmi": "Low Household Carbon Footprint",
-    "items": [
-      {
-        "icon": "🚲",
-        "title": "Zero-Emission Local Errands",
-        "description": "Combine neighborhood shopping trips into a single shared run or cycle mid-afternoon.",
-        "impact": "Directly avoids localized exhaust"
-      },
-      {
-        "icon": "🔥",
-        "title": "No Open Waste/Biomass Burning",
-        "description": "Encourage community leaf composting; avoid decorative candles/incense indoors.",
-        "impact": "Eliminates high-density indoor VOCs"
-      }
-    ]
+    "items": [{ "icon": "🚲", "title": "...", "description": "...", "impact": "..." }]
   }
+}`;
 }
-`;
 
-    const requestPayload = {
-      contents: [
-        {
-          parts: [{ text: prompt }]
-        }
-      ],
-      generationConfig: {
-        temperature: 0.3,
-        responseMimeType: "application/json"
-      }
-    };
+/**
+ * Call Google Gemini API with candidate model fallback and retry logic.
+ */
+async function callGeminiAPI(params) {
+  const candidateModels = [
+    'gemini-3.1-flash-lite',
+    'gemini-3.5-flash-lite',
+    'gemini-3.8-flash',
+    'gemini-3.6-flash'
+  ];
 
-    const maxRetries = 2; // Retry twice on 503 or 429
-    let attempt = 0;
+  const requestPayload = {
+    contents: [{ parts: [{ text: buildGeminiPrompt(params) }] }],
+    generationConfig: {
+      temperature: 0.3,
+      responseMimeType: 'application/json'
+    }
+  };
 
-    while (attempt <= maxRetries) {
-      attempt++;
+  let lastError = null;
+  const maxRetries = 2;
+
+  for (const modelName of candidateModels) {
+    console.log(`\n🔄 Attempting Gemini API with model: ${modelName}...`);
+    const url = `https://generativelanguage.googleapis.com/v1beta/models/${modelName}:generateContent?key=${encodeURIComponent(GEMINI_API_KEY)}`;
+
+    for (let attempt = 1; attempt <= maxRetries + 1; attempt++) {
       try {
         const response = await fetch(url, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(requestPayload),
-          signal: AbortSignal.timeout(12000)
+          signal: AbortSignal.timeout(8000)
         });
 
         if (!response.ok) {
@@ -262,61 +354,41 @@ Respond with ONLY valid JSON adhering strictly to this JSON schema without any m
           err.model = modelName;
           lastError = err;
 
-          // If 404: Do NOT retry, immediately move to next model
           if (response.status === 404) {
-            console.warn(`❌ Model ${modelName} returned 404 (Not Found / Not available on this key). Moving to next candidate model.`);
+            console.warn(`❌ Model ${modelName} returned 404. Moving to next candidate model.`);
             break;
           }
 
-          // If 503 or 429: Retry up to 2 times with 1.5s delay
           if (response.status === 503 || response.status === 429) {
             console.warn(`⚠️ Model ${modelName} returned HTTP ${response.status} (attempt ${attempt}/${maxRetries + 1}).`);
             if (attempt <= maxRetries) {
-              console.log(`⏳ Waiting 1.5s before retry on ${modelName}...`);
-              await new Promise(res => setTimeout(res, 1500));
+              await sleep(1500);
               continue;
-            } else {
-              console.warn(`❌ Model ${modelName} exhausted ${maxRetries} retries for HTTP ${response.status}. Moving to next candidate model.`);
-              break;
             }
+            console.warn(`❌ Model ${modelName} exhausted retries for HTTP ${response.status}.`);
+            break;
           }
 
-          // Any other error (e.g. 400, 403), log and break to next candidate model
           console.warn(`⚠️ Model ${modelName} returned HTTP ${response.status}: ${errorText}`);
           break;
         }
 
         const result = await response.json();
         const textOutput = result?.candidates?.[0]?.content?.parts?.[0]?.text;
-
         if (!textOutput) {
           throw new Error(`Empty response from Gemini API (${modelName})`);
         }
 
-        let cleaned = textOutput.trim();
-        if (cleaned.startsWith('```json')) cleaned = cleaned.replace(/^```json/, '').replace(/```$/, '').trim();
-        else if (cleaned.startsWith('```')) cleaned = cleaned.replace(/^```/, '').replace(/```$/, '').trim();
-
-        const parsedPlan = JSON.parse(cleaned);
-        return { plan: parsedPlan, model: modelName };
-
+        const cleaned = textOutput.trim().replace(/^```(?:json)?/, '').replace(/```$/, '').trim();
+        return { plan: JSON.parse(cleaned), model: modelName };
       } catch (fetchErr) {
         lastError = fetchErr;
-        if (fetchErr.name === 'TimeoutError' || fetchErr.name === 'AbortError') {
-          console.warn(`⏳ Request timed out for ${modelName} (attempt ${attempt}/${maxRetries + 1}).`);
-          if (attempt <= maxRetries) {
-            console.log(`⏳ Waiting 1.5s before retry on ${modelName}...`);
-            await new Promise(res => setTimeout(res, 1500));
-            continue;
-          }
-          break;
-        }
-        if (fetchErr.status === 404) {
-          break;
-        }
-        if (attempt <= maxRetries && (fetchErr.status === 503 || fetchErr.status === 429)) {
-          console.warn(`⚠️ Fetch failed for ${modelName} (HTTP ${fetchErr.status}). Retrying in 1.5s...`);
-          await new Promise(res => setTimeout(res, 1500));
+        const isTimeout = fetchErr.name === 'TimeoutError' || fetchErr.name === 'AbortError';
+        const isRetryableStatus = fetchErr.status === 503 || fetchErr.status === 429;
+
+        if ((isTimeout || isRetryableStatus) && attempt <= maxRetries) {
+          console.warn(`⏳ Retryable error for ${modelName} (attempt ${attempt}/${maxRetries + 1}): ${fetchErr.message}`);
+          await sleep(1500);
           continue;
         }
         break;
@@ -324,21 +396,19 @@ Respond with ONLY valid JSON adhering strictly to this JSON schema without any m
     }
   }
 
-  // If all candidate models failed, throw the last error
   throw lastError || new Error('All Gemini candidate models failed to respond.');
 }
 
 /**
- * Expert Rule-Based Plan Generator (Local Intelligent Fallback)
+ * Expert Rule-Based Plan Generator (Local Intelligent Fallback).
  */
-function generateExpertFallbackPlan({ city, members, transport, homeType, aqi, language }) {
+function generateExpertFallbackPlan({ members = [], transport, homeType, aqi, language }) {
   const isHi = language === 'hi';
   const hasKids = members.includes('children');
   const hasElderly = members.includes('elderly');
   const hasAsthma = members.includes('asthma');
 
-  // Compute calculated metrics
-  let expReduction = '-45% se -60%';
+  let expReduction = isHi ? '-45% se -60%' : '-45% to -60%';
   let barPercent = '65%';
   let emissionSaved = '~2.4 kg CO₂e';
   let emissionPercent = '68%';
@@ -346,21 +416,28 @@ function generateExpertFallbackPlan({ city, members, transport, homeType, aqi, l
   if (aqi > 300) {
     expReduction = isHi ? '-55% se -70%' : '-55% to -70%';
     barPercent = '75%';
-    emissionSaved = isHi ? '~3.1 kg CO₂e' : '~3.1 kg CO₂e';
+    emissionSaved = '~3.1 kg CO₂e';
     emissionPercent = '80%';
   } else if (aqi < 150) {
     expReduction = isHi ? '-25% se -40%' : '-25% to -40%';
     barPercent = '45%';
-    emissionSaved = isHi ? '~1.8 kg CO₂e' : '~1.8 kg CO₂e';
+    emissionSaved = '~1.8 kg CO₂e';
     emissionPercent = '50%';
   }
 
-  let healthRating = isHi ? 'Uchch Suraksha (High Protection)' : 'High Protection Protocol';
-  let vulnerableSummary = isHi
-    ? `${hasKids ? 'Bachche, ' : ''}${hasElderly ? 'Buzurg, ' : ''}${hasAsthma ? 'Asthma Rogi ' : ''}ke liye targeted bachaav`
-    : `Targeted shielding for ${hasKids ? 'Children, ' : ''}${hasElderly ? 'Seniors, ' : ''}${hasAsthma ? 'Respiratory patients' : 'All members'}`;
+  const healthRating = isHi ? 'Uchch Suraksha (High Protection)' : 'High Protection Protocol';
+  const activeGroups = [
+    hasKids && (isHi ? 'Bachche' : 'Children'),
+    hasElderly && (isHi ? 'Buzurg' : 'Seniors'),
+    hasAsthma && (isHi ? 'Asthma Rogi' : 'Respiratory patients')
+  ].filter(Boolean);
 
-  // Section A: Low-emission daily routine
+  const vulnerableSummary = isHi
+    ? `${activeGroups.length ? activeGroups.join(', ') : 'Sabhi sadasyon'} ke liye targeted bachaav`
+    : `Targeted shielding for ${activeGroups.length ? activeGroups.join(', ') : 'All members'}`;
+
+  const isOpenCommute = transport === 'two_wheeler' || transport === 'walk_cycle';
+
   const routineItems = isHi ? [
     {
       icon: '⏰',
@@ -371,7 +448,7 @@ function generateExpertFallbackPlan({ city, members, transport, homeType, aqi, l
     {
       icon: '🚇',
       title: 'Commute Modification & Mask Protocol',
-      description: transport === 'two_wheeler' || transport === 'walk_cycle'
+      description: isOpenCommute
         ? `Aap ${transport === 'two_wheeler' ? 'bike/scooter' : 'cycle/walk'} se travel karte hain jo open-air hai. Smog season mein Metro ya AC Bus use karein ya double-sealed N95 mask zaroor pehnein.`
         : 'Closed car ya public transit mein recirculation mode on rakhein taaki bahar ka dhuan andar na aaye.',
       impact: 'Personal emissions mein ~1.8 kg bachat aur 45% kam exposure'
@@ -394,7 +471,7 @@ function generateExpertFallbackPlan({ city, members, transport, homeType, aqi, l
     {
       icon: '🚇',
       title: 'Commute & Travel Safeguards',
-      description: transport === 'two_wheeler' || transport === 'walk_cycle'
+      description: isOpenCommute
         ? 'Two-wheeler and pedestrian transit exposes you to direct tailpipe emissions. Shift to Metro/bus or strictly don an N95 certified respirator.'
         : 'Keep vehicle ventilation on internal recirculation mode to block external exhaust.',
       impact: 'Saves ~1.8 kg commute emissions & shields airways'
@@ -409,7 +486,6 @@ function generateExpertFallbackPlan({ city, members, transport, homeType, aqi, l
     }
   ];
 
-  // Section B: Indoor air quality hacks
   const indoorItems = isHi ? [
     {
       icon: '🧹',
@@ -454,7 +530,6 @@ function generateExpertFallbackPlan({ city, members, transport, homeType, aqi, l
     }
   ];
 
-  // Section C: Sustainable alternatives
   const sustainableItems = isHi ? [
     {
       icon: '🛒',
@@ -501,38 +576,96 @@ function generateExpertFallbackPlan({ city, members, transport, homeType, aqi, l
       exposureBarPercent: barPercent,
       emissionsSaved: emissionSaved,
       emissionsBarPercent: emissionPercent,
-      healthRating: healthRating,
-      vulnerableSummary: vulnerableSummary
+      healthRating,
+      vulnerableSummary
     },
     sectionA: {
-      title: isHi ? 'Low-Emission Daily Routine' : 'Low-Emission Daily Routine',
-      impactChipExp: isHi ? '-50% Peak Inhalation' : '-50% Peak Inhalation',
-      impactChipEmi: isHi ? 'Transit Footprint Savings' : 'Transit Footprint Savings',
+      title: 'Low-Emission Daily Routine',
+      impactChipExp: '-50% Peak Inhalation',
+      impactChipEmi: 'Transit Footprint Savings',
       items: routineItems
     },
     sectionB: {
-      title: isHi ? 'Indoor Air Quality Hacks' : 'Indoor Air Quality Hacks',
-      impactChipExp: isHi ? '-40% Indoor PM2.5' : '-40% Indoor PM2.5',
-      impactChipEmi: isHi ? 'Zero-Electricity Hacks' : 'Zero-Electricity Hacks',
+      title: 'Indoor Air Quality Hacks',
+      impactChipExp: '-40% Indoor PM2.5',
+      impactChipEmi: 'Zero-Electricity Hacks',
       items: indoorItems
     },
     sectionC: {
-      title: isHi ? 'Sustainable Alternatives' : 'Sustainable Alternatives',
-      impactChipExp: isHi ? 'Cleaner Local Air' : 'Cleaner Local Air',
-      impactChipEmi: isHi ? 'Reduced Carbon Footprint' : 'Reduced Carbon Footprint',
+      title: 'Sustainable Alternatives',
+      impactChipExp: 'Cleaner Local Air',
+      impactChipEmi: 'Reduced Carbon Footprint',
       items: sustainableItems
     }
   };
 }
 
 /**
- * Native HTTP Server
+ * Serve static files from public/ with gzip compression and cache headers.
+ */
+function serveStaticFile(req, res, pathname) {
+  let decodedPath;
+  try {
+    decodedPath = decodeURIComponent(pathname);
+  } catch {
+    res.writeHead(400, { 'Content-Type': 'text/plain; charset=UTF-8' });
+    return res.end('400 Bad Request');
+  }
+
+  const relativePath = decodedPath === '/' ? 'index.html' : `.${decodedPath}`;
+  const filePath = path.resolve(PUBLIC_DIR, relativePath);
+
+  if (!filePath.startsWith(PUBLIC_DIR + path.sep) && filePath !== PUBLIC_DIR) {
+    res.writeHead(403, { 'Content-Type': 'text/plain; charset=UTF-8' });
+    return res.end('403 Forbidden');
+  }
+
+  fs.stat(filePath, (err, stats) => {
+    if (err || !stats.isFile()) {
+      res.writeHead(404, { 'Content-Type': 'text/plain; charset=UTF-8' });
+      return res.end('404 Not Found');
+    }
+
+    const ext = path.extname(filePath).toLowerCase();
+    const contentType = MIME_TYPES[ext] || 'application/octet-stream';
+    const cacheControl = ext === '.html' ? 'no-cache' : 'public, max-age=3600';
+    const acceptEncoding = req.headers['accept-encoding'] || '';
+    const shouldGzip = COMPRESSIBLE_EXTS.has(ext) && /\bgzip\b/.test(acceptEncoding);
+
+    const headers = {
+      'Content-Type': contentType,
+      'Cache-Control': cacheControl
+    };
+    if (shouldGzip) {
+      headers['Content-Encoding'] = 'gzip';
+      headers['Vary'] = 'Accept-Encoding';
+    }
+
+    res.writeHead(200, headers);
+    const readStream = fs.createReadStream(filePath);
+    readStream.on('error', () => {
+      if (!res.headersSent) res.writeHead(500);
+      res.end();
+    });
+
+    if (shouldGzip) {
+      readStream.pipe(zlib.createGzip()).pipe(res);
+    } else {
+      readStream.pipe(res);
+    }
+  });
+}
+
+/**
+ * Native HTTP Server with security headers, API routing, and static asset delivery.
  */
 const server = http.createServer((req, res) => {
-  // CORS Headers
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  res.setHeader('X-Frame-Options', 'DENY');
+  res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin');
 
   if (req.method === 'OPTIONS') {
     res.writeHead(204);
@@ -542,50 +675,35 @@ const server = http.createServer((req, res) => {
   const parsedUrl = new URL(req.url, `http://${req.headers.host || 'localhost'}`);
   const pathname = parsedUrl.pathname;
 
-  // API Route: POST /api/generate-plan
   if (pathname === '/api/generate-plan' && req.method === 'POST') {
     return handleGeneratePlan(req, res);
   }
 
-  // Health check
-  if (pathname === '/api/health') {
-    res.writeHead(200, { 'Content-Type': 'application/json' });
-    return res.end(JSON.stringify({
+  if (pathname === '/api/health' && req.method === 'GET') {
+    return sendJson(res, 200, {
       status: 'ok',
       service: 'SaansSaaf Air Quality Assistant',
-      hasGeminiKey: Boolean(GEMINI_API_KEY && GEMINI_API_KEY !== 'your_gemini_api_key_here')
-    }));
+      hasGeminiKey: hasActiveGeminiKey()
+    });
   }
 
-  // Serve static files from public/
-  let filePath = path.join(__dirname, 'public', pathname === '/' ? 'index.html' : pathname);
+  return serveStaticFile(req, res, pathname);
+});
 
-  // Security: prevent directory traversal
-  if (!filePath.startsWith(path.join(__dirname, 'public'))) {
-    res.writeHead(403, { 'Content-Type': 'text/plain' });
-    return res.end('403 Forbidden');
-  }
-
-  fs.stat(filePath, (err, stats) => {
-    if (err || !stats.isFile()) {
-      // If file not found, try fallback or 404
-      res.writeHead(404, { 'Content-Type': 'text/plain' });
-      return res.end('404 Not Found');
-    }
-
-    const ext = path.extname(filePath).toLowerCase();
-    const contentType = MIME_TYPES[ext] || 'application/octet-stream';
-
-    res.writeHead(200, { 'Content-Type': contentType });
-    const readStream = fs.createReadStream(filePath);
-    readStream.pipe(res);
+if (require.main === module) {
+  server.listen(PORT, () => {
+    console.log('=======================================================');
+    console.log(' 🫁 SaansSaaf - Urban Air Quality Assistant Backend ');
+    console.log(` Server is running on: http://localhost:${PORT}`);
+    console.log(` Gemini API Status: ${hasActiveGeminiKey() ? '✅ Key Active' : 'ℹ️ Rule-Based Engine Active (Set GEMINI_API_KEY in .env to enable Live AI)'}`);
+    console.log('=======================================================');
   });
-});
+}
 
-server.listen(PORT, () => {
-  console.log(`=======================================================`);
-  console.log(` 🫁 SaansSaaf - Urban Air Quality Assistant Backend `);
-  console.log(` Server is running on: http://localhost:${PORT}`);
-  console.log(` Gemini API Status: ${GEMINI_API_KEY && GEMINI_API_KEY !== 'your_gemini_api_key_here' ? '✅ Key Active' : 'ℹ️ Rule-Based Engine Active (Set GEMINI_API_KEY in .env to enable Live AI)'}`);
-  console.log(`=======================================================`);
-});
+module.exports = {
+  server,
+  planCache,
+  sanitizePlanRequest,
+  generateExpertFallbackPlan,
+  buildGeminiPrompt
+};
