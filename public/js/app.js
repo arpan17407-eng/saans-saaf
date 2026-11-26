@@ -1,3 +1,5 @@
+'use strict';
+
 /**
  * app.js
  * Main Client-side Controller for SaansSaaf
@@ -416,14 +418,20 @@ function validateForm() {
 
   // Transport validation
   if (!elements.transportSelect.value) {
-    elements.transportSelect.focus();
+    showError(elements.transportSelect, null, '');
+    if (isValid) elements.transportSelect.focus();
     isValid = false;
+  } else {
+    clearError(elements.transportSelect, null);
   }
 
   // Home Type validation
   if (!elements.homeTypeSelect.value) {
-    elements.homeTypeSelect.focus();
+    showError(elements.homeTypeSelect, null, '');
+    if (isValid) elements.homeTypeSelect.focus();
     isValid = false;
+  } else {
+    clearError(elements.homeTypeSelect, null);
   }
 
   // AQI check

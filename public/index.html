@@ -10,10 +10,11 @@
   <link rel="stylesheet" href="css/style.css">
 </head>
 <body>
+  <a href="#mainContent" class="skip-link">Skip to main content</a>
   <!-- Top Medical Disclaimer Bar -->
   <aside class="disclaimer-bar" role="alert">
     <div class="container disclaimer-content">
-      <span class="disclaimer-icon">⚠️</span>
+      <span class="disclaimer-icon" aria-hidden="true">⚠️</span>
       <p id="medicalDisclaimerTop">
         <strong>Medical Disclaimer:</strong> Ye general jaankari hai, kisi doctor ya medical professional ki salah nahi hai.
       </p>
@@ -47,7 +48,7 @@
   </header>
 
   <!-- Main Content Container -->
-  <main class="container main-content">
+  <main id="mainContent" class="container main-content" tabindex="-1">
     
     <!-- Hero Introduction Card -->
     <section class="intro-banner" id="introBanner">
@@ -202,7 +203,7 @@
         <div class="form-body">
           
           <!-- Big AQI Display with Live Health Color -->
-          <div class="aqi-display-box" id="aqiDisplayBox">
+          <div class="aqi-display-box" id="aqiDisplayBox" aria-live="polite">
             <div class="aqi-main-metric">
               <span class="aqi-num-caption" id="lblCurrentAqi">Current AQI</span>
               <div class="aqi-big-value" id="aqiBigValue">340</div>

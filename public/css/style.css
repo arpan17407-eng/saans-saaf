@@ -75,6 +75,31 @@
   padding: 0;
 }
 
+.skip-link {
+  position: absolute;
+  top: -100px;
+  left: 16px;
+  z-index: 9999;
+  background: var(--color-primary-dark);
+  color: var(--text-inverted);
+  padding: 10px 16px;
+  border-radius: 8px;
+  font-weight: 600;
+  text-decoration: none;
+  transition: top 0.15s ease;
+}
+
+.skip-link:focus {
+  top: 12px;
+  outline: 3px solid var(--color-accent);
+  outline-offset: 2px;
+}
+
+:focus-visible {
+  outline: 2px solid var(--color-primary);
+  outline-offset: 2px;
+}
+
 body {
   font-family: var(--font-sans);
   background-color: var(--bg-main);
